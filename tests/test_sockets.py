@@ -21,9 +21,10 @@ from pathlib import Path
 from socket import AddressFamily
 from ssl import SSLContext, SSLError
 from threading import Thread
+from types import TracebackType
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, Protocol, cast
 from unittest import mock
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import psutil
 import pytest
@@ -37,6 +38,7 @@ from pytest_mock.plugin import MockerFixture
 from anyio import (
     BrokenResourceError,
     BusyResourceError,
+    CancelScope,
     ClosedResourceError,
     EndOfStream,
     Event,
@@ -250,6 +252,54 @@ class TestTCPStream:
             )
             assert stream.extra(SocketAttribute.remote_address) == server_addr
             assert stream.extra(SocketAttribute.remote_port) == server_addr[1]
+
+    async def test_connect_tcp_closes_stream_if_cancelled_after_connecting(
+        self, monkeypatch: MonkeyPatch
+    ) -> None:
+        stream = MagicMock(spec=SocketStream)
+        stream.aclose = AsyncMock()
+
+        class Backend:
+            async def connect_tcp(
+                self, remote_host: str, remote_port: int, local_address: object
+            ) -> SocketStream:
+                return stream
+
+        real_create_task_group = create_task_group
+
+        class CancelDuringExit:
+            def __init__(self) -> None:
+                self._task_group = real_create_task_group()
+
+            async def __aenter__(self) -> Any:
+                return await self._task_group.__aenter__()
+
+            async def __aexit__(
+                self,
+                exc_type: type[BaseException] | None,
+                exc_val: BaseException | None,
+                exc_tb: TracebackType | None,
+            ) -> bool:
+                outer_scope.cancel()
+                return await self._task_group.__aexit__(exc_type, exc_val, exc_tb)
+
+            @property
+            def cancel_scope(self) -> Any:
+                return self._task_group.cancel_scope
+
+            def start_soon(self, *args: Any, **kwargs: Any) -> Any:
+                return self._task_group.start_soon(*args, **kwargs)
+
+        monkeypatch.setattr("anyio._core._sockets.create_task_group", CancelDuringExit)
+        monkeypatch.setattr("anyio._core._sockets.get_async_backend", lambda: Backend())
+
+        returned = False
+        with CancelScope() as outer_scope:
+            await connect_tcp("127.0.0.1", 1234)
+            returned = True
+
+        assert not returned
+        stream.aclose.assert_awaited_once()
 
     async def test_cancelled_send_does_not_send_the_next_one(
         self, server_sock: socket.socket, server_addr: tuple[str, int]

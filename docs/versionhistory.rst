@@ -49,6 +49,9 @@ This library adheres to `Semantic Versioning 2.0 <http://semver.org/>`_.
 - Fixed Trio UDP sockets wrapping a temporary Windows ICMP port-unreachable error as
   ``BrokenResourceError`` even though the socket remains usable
   (`#1239 <https://github.com/agronholm/anyio/issues/1239>`_; PR by @Samuel-Hills)
+- Fixed ``connect_tcp()`` leaking a connected socket when cancellation arrives while
+  the connection task group is shutting down
+  (`#1364 <https://github.com/agronholm/anyio/issues/1364>`_)
 - Fixed ``Lock.locked()`` (and ``Condition.locked()``) raising ``NoEventLoopError``
   when the lock was created outside a running event loop
   (`#1362 <https://github.com/agronholm/anyio/issues/1362>`_; PR by @00200200)
